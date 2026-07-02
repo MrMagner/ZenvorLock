@@ -3,7 +3,8 @@ __pycache__/
 *.pyo
 
 build/
-dist/
+dist/SecureAppLocker/
+dist/SecureAppLocker.exe
 logs/
 .data/
 
