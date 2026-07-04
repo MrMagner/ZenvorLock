@@ -26,31 +26,46 @@ _BTN_CANCEL_FG = "#1f3a5f"
 _FONT_FAMILY = "Segoe UI"
 _LOCK_ICON = "\U0001F512"  # 🔒
 
+# Minimum dialog widths (in pixels at 96 DPI; Tk will scale them automatically)
+_MIN_WIDTH_PROMPT = 460
+_MIN_WIDTH_DIALOG = 440
+
 
 def _lockout_message(lockout_seconds: float) -> str:
     remaining_seconds = max(1, math.ceil(lockout_seconds))
     return f"Too many failed attempts. Try again in {remaining_seconds} seconds."
 
 
-def _center_dialog(window: tk.Toplevel, parent: tk.Misc | None = None) -> None:
-    try:
-        window.tk.call("tk", "PlaceWindow", window._w, "center")
-        return
-    except Exception:
-        pass
-
+def _auto_fit_and_center(
+    window: tk.Toplevel,
+    parent: tk.Misc | None = None,
+    min_width: int = 440,
+) -> None:
+    """Let the window auto-size to its content, enforce a minimum width, then center it."""
     window.update_idletasks()
+
+    # Measure natural content size
+    req_w = max(window.winfo_reqwidth(), min_width)
+    req_h = window.winfo_reqheight()
+
+    # Add a safety margin so nothing is clipped on high-DPI displays
+    final_w = req_w + 20
+    final_h = req_h + 20
+
+    # Determine center position
     if (
         parent is not None
         and parent.winfo_exists()
         and bool(int(parent.winfo_viewable()))
     ):
-        x = parent.winfo_x() + (parent.winfo_width() - window.winfo_width()) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - window.winfo_height()) // 2
+        cx = parent.winfo_x() + (parent.winfo_width() - final_w) // 2
+        cy = parent.winfo_y() + (parent.winfo_height() - final_h) // 2
     else:
-        x = (window.winfo_screenwidth() - window.winfo_width()) // 2
-        y = (window.winfo_screenheight() - window.winfo_height()) // 2
-    window.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        cx = (window.winfo_screenwidth() - final_w) // 2
+        cy = (window.winfo_screenheight() - final_h) // 2
+
+    window.geometry(f"{final_w}x{final_h}+{max(cx, 0)}+{max(cy, 0)}")
+    window.minsize(final_w, final_h)
 
 
 def _focus_password_entry(entry: tk.Entry) -> None:
@@ -155,8 +170,7 @@ class PasswordPrompt:
         self._lockout_job: str | None = None
         self._dismissed = False
 
-        self.root.title(f"{APP_DISPLAY_NAME} — Authentication Required")
-        self.root.geometry("460x260")
+        self.root.title(f"{APP_DISPLAY_NAME} \u2014 Authentication Required")
         self.root.resizable(False, False)
         self.root.configure(bg=_BG)
 
@@ -176,11 +190,9 @@ class PasswordPrompt:
         except Exception:
             pass
 
-        _center_dialog(self.root)
-
         # ── Header section ───────────────────────────────────────────────
         header = tk.Frame(self.root, bg=_BG_HEADER)
-        header.pack(fill=tk.X, padx=0, pady=0)
+        header.pack(fill=tk.X)
 
         tk.Label(
             header,
@@ -197,7 +209,7 @@ class PasswordPrompt:
             font=(_FONT_FAMILY, 12, "bold"),
             bg=_BG_HEADER,
             fg=_FG_TITLE,
-        ).pack(pady=(0, 12))
+        ).pack(pady=(0, 14))
 
         # ── Body section ─────────────────────────────────────────────────
         body = tk.Frame(self.root, bg=_BG)
@@ -210,10 +222,10 @@ class PasswordPrompt:
             bg=_BG,
             fg=_FG_SUBTITLE,
             anchor=tk.W,
-        ).pack(fill=tk.X, pady=(0, 4))
+        ).pack(fill=tk.X, pady=(0, 6))
 
         self.password_entry = _create_styled_entry(body)
-        _pack_styled_entry(self.password_entry, fill=tk.X, pady=(0, 4))
+        _pack_styled_entry(self.password_entry, fill=tk.X, pady=(0, 6))
         self.password_entry.bind("<Return>", lambda event: self.on_submit())
         self.root.after(75, self._focus_password_entry)
 
@@ -232,16 +244,19 @@ class PasswordPrompt:
 
         # ── Buttons ──────────────────────────────────────────────────────
         btn_frame = tk.Frame(self.root, bg=_BG)
-        btn_frame.pack(fill=tk.X, padx=32, pady=(12, 20))
+        btn_frame.pack(fill=tk.X, padx=32, pady=(16, 24))
 
         self.submit_button = _create_styled_button(
             btn_frame, "Unlock", self.on_submit, primary=True
         )
-        self.submit_button.pack(side=tk.LEFT, padx=(0, 8))
+        self.submit_button.pack(side=tk.LEFT, padx=(0, 10))
 
         _create_styled_button(
             btn_frame, "Cancel", self.on_cancel, primary=False
         ).pack(side=tk.LEFT)
+
+        # ── Auto-fit window to content, then center ──────────────────────
+        _auto_fit_and_center(self.root, min_width=_MIN_WIDTH_PROMPT)
 
         self._refresh_lockout_state()
 
@@ -332,7 +347,6 @@ class MasterPasswordDialog:
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(title)
-        self.dialog.geometry("440x240")
         self.dialog.resizable(False, False)
         self.dialog.configure(bg=_BG)
 
@@ -343,11 +357,9 @@ class MasterPasswordDialog:
         self.dialog.focus_force()
         self.dialog.protocol("WM_DELETE_WINDOW", self.close)
 
-        _center_dialog(self.dialog, parent)
-
         # ── Header section ───────────────────────────────────────────────
         header = tk.Frame(self.dialog, bg=_BG_HEADER)
-        header.pack(fill=tk.X, padx=0, pady=0)
+        header.pack(fill=tk.X)
 
         header_content = tk.Frame(header, bg=_BG_HEADER)
         header_content.pack(pady=(16, 14))
@@ -381,10 +393,10 @@ class MasterPasswordDialog:
             anchor=tk.W,
             wraplength=360,
             justify=tk.LEFT,
-        ).pack(fill=tk.X, pady=(0, 10))
+        ).pack(fill=tk.X, pady=(0, 12))
 
         self.password_entry = _create_styled_entry(body)
-        _pack_styled_entry(self.password_entry, fill=tk.X, pady=(0, 4))
+        _pack_styled_entry(self.password_entry, fill=tk.X, pady=(0, 6))
         self.password_entry.bind("<Return>", lambda event: self.submit())
         self.dialog.after(75, self._focus_password_entry)
 
@@ -403,16 +415,19 @@ class MasterPasswordDialog:
 
         # ── Buttons ──────────────────────────────────────────────────────
         btn_frame = tk.Frame(self.dialog, bg=_BG)
-        btn_frame.pack(fill=tk.X, padx=32, pady=(12, 20))
+        btn_frame.pack(fill=tk.X, padx=32, pady=(16, 24))
 
         self.submit_button = _create_styled_button(
             btn_frame, action_label, self.submit, primary=True
         )
-        self.submit_button.pack(side=tk.LEFT, padx=(0, 8))
+        self.submit_button.pack(side=tk.LEFT, padx=(0, 10))
 
         _create_styled_button(
             btn_frame, "Cancel", self.close, primary=False
         ).pack(side=tk.LEFT)
+
+        # ── Auto-fit window to content, then center ──────────────────────
+        _auto_fit_and_center(self.dialog, parent, min_width=_MIN_WIDTH_DIALOG)
 
         self._refresh_lockout_state()
 
