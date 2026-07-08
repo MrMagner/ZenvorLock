@@ -703,82 +703,122 @@ class Dashboard(tk.Toplevel):
         self._center_child_dialog(dialog)
 
     def show_setup_password_dialog(self):
+        from app_utils.paths import get_project_root
+        
         dialog = tk.Toplevel(self)
         dialog.title("Initial Setup")
-        dialog.geometry("410x270")
         dialog.transient(self)
         dialog.grab_set()
         dialog.configure(bg="#ffffff")
         dialog.resizable(False, False)
-
-        self._center_child_dialog(dialog)
-
         dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+        
+        main_container = tk.Frame(dialog, bg="#ffffff")
+        main_container.pack(fill=tk.BOTH, expand=True, padx=48, pady=(24, 32))
 
+        # Logo
+        try:
+            logo_path = get_project_root() / "assets" / "dashboard_logo.png"
+            img = Image.open(logo_path).resize((64, 64), Image.Resampling.LANCZOS)
+            self._setup_logo = ImageTk.PhotoImage(img)
+            logo_lbl = tk.Label(main_container, image=self._setup_logo, bg="#ffffff")
+            logo_lbl.pack(pady=(0, 16))
+        except Exception:
+            pass
+
+        # Headers
         tk.Label(
-            dialog,
+            main_container,
             text=f"Welcome to {APP_DISPLAY_NAME}",
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 16, "bold"),
             bg="#ffffff",
             fg="#1f2a37",
-        ).pack(pady=(20, 6))
+        ).pack(pady=(0, 4))
         tk.Label(
-            dialog,
-            text="Set the master password used for unlocking and dashboard changes.",
+            main_container,
+            text="Set the master password used for unlocking\nand dashboard changes.",
             font=("Segoe UI", 10),
             bg="#ffffff",
-            fg="#5b6470",
-        ).pack(pady=(0, 10))
+            fg="#4b5563",
+            justify=tk.CENTER
+        ).pack(pady=(0, 20))
+
+        # Policy Box
+        policy_frame = tk.Frame(main_container, bg="#faf8ff", highlightbackground="#e9e3ff", highlightthickness=1)
+        policy_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        policy_inner = tk.Frame(policy_frame, bg="#faf8ff")
+        policy_inner.pack(padx=16, pady=12)
         tk.Label(
-            dialog,
-            text=get_master_password_policy_hint(),
+            policy_inner,
+            text="🛡\ufe0f Use at least 12 characters and include all of these:\nuppercase letters, lowercase letters, numbers, and symbols.",
             font=("Segoe UI", 9),
-            bg="#ffffff",
-            fg="#6b7280",
-            wraplength=340,
-            justify=tk.CENTER,
-        ).pack(pady=(0, 8))
+            bg="#faf8ff",
+            fg="#5b21b6",
+            justify=tk.CENTER
+        ).pack()
 
-        tk.Label(
-            dialog,
-            text="Password",
-            font=("Segoe UI", 9),
-            bg="#ffffff",
-            fg="#5b6470",
-        ).pack(pady=(4, 0))
-        pwd_entry = tk.Entry(dialog, show="*", width=30)
-        pwd_entry.pack(pady=4)
+        # Helper to create input fields
+        def create_input_field(parent, label_text, placeholder_text):
+            tk.Label(
+                parent, text=label_text, font=("Segoe UI", 9), bg="#ffffff", fg="#374151"
+            ).pack(anchor=tk.W, pady=(0, 6))
+            
+            field_frame = tk.Frame(parent, bg="#ffffff", highlightbackground="#d1d5db", highlightthickness=1)
+            field_frame.pack(fill=tk.X, pady=(0, 16))
+            
+            # Left icon (Lock)
+            tk.Label(field_frame, text="\U0001f512", font=("Segoe UI", 10), bg="#ffffff", fg="#9ca3af").pack(side=tk.LEFT, padx=12)
+            
+            entry_var = tk.StringVar()
+            entry = tk.Entry(field_frame, textvariable=entry_var, font=("Segoe UI", 10), show="*", bd=0, highlightthickness=0, bg="#ffffff", fg="#111827", insertbackground="#111827")
+            entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8)
+            
+            # Placeholder logic
+            def on_focus_in(e):
+                if entry_var.get() == placeholder_text:
+                    entry.delete(0, tk.END)
+                    entry.config(fg="#111827", show="*")
+            def on_focus_out(e):
+                if not entry_var.get():
+                    entry.insert(0, placeholder_text)
+                    entry.config(fg="#9ca3af", show="")
+            
+            entry.insert(0, placeholder_text)
+            entry.config(fg="#9ca3af", show="")
+            entry.bind("<FocusIn>", on_focus_in)
+            entry.bind("<FocusOut>", on_focus_out)
+            
+            # Eye toggle
+            eye_lbl = tk.Label(field_frame, text="\U0001f441\ufe0f", font=("Segoe UI", 11), bg="#ffffff", fg="#6b7280", cursor="hand2")
+            eye_lbl.pack(side=tk.RIGHT, padx=12)
+            
+            def toggle_eye(e):
+                if entry_var.get() != placeholder_text:
+                    current_show = entry.cget("show")
+                    entry.config(show="" if current_show == "*" else "*")
+            eye_lbl.bind("<Button-1>", toggle_eye)
+            
+            return entry, entry_var
 
-        tk.Label(
-            dialog,
-            text="Re-enter Password",
-            font=("Segoe UI", 9),
-            bg="#ffffff",
-            fg="#5b6470",
-        ).pack(pady=(4, 0))
-        confirm_entry = tk.Entry(dialog, show="*", width=30)
-        confirm_entry.pack(pady=4)
-
-        pwd_entry.bind("<Return>", lambda e: confirm_entry.focus_set())
-        confirm_entry.bind("<Return>", lambda e: save_password())
-
-        pwd_entry.focus()
+        pwd_entry, pwd_var = create_input_field(main_container, "Master Password", "Enter master password")
+        confirm_entry, confirm_var = create_input_field(main_container, "Re-enter Password", "Confirm master password")
 
         def save_password(event=None):
+            # Clean placeholders
+            if pwd_var.get() == "Enter master password": pwd_entry.delete(0, tk.END)
+            if confirm_var.get() == "Confirm master password": confirm_entry.delete(0, tk.END)
+            
             password = pwd_entry.get()
             confirmation = confirm_entry.get()
             validation_error = validate_master_password_strength(password)
             if validation_error:
                 messagebox.showerror("Weak Password", validation_error, parent=dialog)
                 pwd_entry.focus_set()
-                pwd_entry.select_range(0, tk.END)
                 return
             if password != confirmation:
-                messagebox.showerror(
-                    "Password Mismatch", "The passwords do not match.", parent=dialog
-                )
+                messagebox.showerror("Password Mismatch", "The passwords do not match.", parent=dialog)
                 confirm_entry.focus_set()
-                confirm_entry.select_range(0, tk.END)
                 return
             success, result = setup_master_password(password)
             if success:
@@ -787,24 +827,28 @@ class Dashboard(tk.Toplevel):
                 dialog.destroy()
                 self._show_recovery_key_dialog(recovery_key)
                 return
-            messagebox.showerror(
-                "Error",
-                result,
-                parent=dialog,
-            )
+            messagebox.showerror("Error", result, parent=dialog)
 
-        tk.Button(
-            dialog,
-            text="Save Password",
-            command=save_password,
-            width=16,
-            bg="#1f6feb",
+        # Save Button
+        save_btn = tk.Button(
+            main_container,
+            text="\U0001f512 Save Password",
+            font=("Segoe UI", 10, "bold"),
+            bg="#5b21b6",
             fg="#ffffff",
-            relief=tk.FLAT,
-        ).pack(pady=14)
-        pwd_entry.bind("<Return>", lambda _event: confirm_entry.focus_set())
-        confirm_entry.bind("<Return>", lambda _event: save_password())
-        self._fit_dialog_to_content(dialog, min_width=410, min_height=270)
+            activebackground="#4c1d95",
+            activeforeground="#ffffff",
+            bd=0,
+            cursor="hand2",
+            command=save_password
+        )
+        save_btn.pack(fill=tk.X, pady=(12, 0), ipady=8)
+
+        pwd_entry.bind("<Return>", lambda _e: confirm_entry.focus_set())
+        confirm_entry.bind("<Return>", save_password)
+
+        dialog.after(100, pwd_entry.focus_set)
+        self._fit_dialog_to_content(dialog, min_width=520, min_height=580)
 
     def _show_recovery_key_dialog(self, recovery_key: str):
         dialog = tk.Toplevel(self)
