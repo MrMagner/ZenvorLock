@@ -36,9 +36,14 @@ class Dashboard(QMainWindow):
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #f3f4f6;
+                color: #111827;
+            }
+            QWidget {
+                color: #111827;
             }
             QLabel {
                 font-family: 'Segoe UI';
+                color: #111827;
             }
         """)
 
@@ -134,7 +139,7 @@ class Dashboard(QMainWindow):
         self.search_input.setFixedHeight(32)
         self.search_input.setStyleSheet("""
             QLineEdit {
-                border: 1px solid #d1d5db; border-radius: 4px; padding: 0 8px; background: white;
+                border: 1px solid #d1d5db; border-radius: 4px; padding: 0 8px; background: white; color: #111827;
             }
         """)
         self.search_input.textChanged.connect(self.apply_filters)
@@ -143,7 +148,7 @@ class Dashboard(QMainWindow):
         # Right Action Buttons
         self.custom_path_btn = QPushButton("Custom Path")
         self.custom_path_btn.setFixedHeight(32)
-        self.custom_path_btn.setStyleSheet("QPushButton { background-color: white; border: 1px solid #d1d5db; border-radius: 4px; padding: 0 12px; } QPushButton:hover { background-color: #f3f4f6; }")
+        self.custom_path_btn.setStyleSheet("QPushButton { background-color: white; color: #111827; border: 1px solid #d1d5db; border-radius: 4px; padding: 0 12px; } QPushButton:hover { background-color: #f3f4f6; }")
         self.custom_path_btn.clicked.connect(self.add_custom_path)
         top_ctrl_layout.addWidget(self.custom_path_btn)
 
@@ -177,7 +182,7 @@ class Dashboard(QMainWindow):
         self.status_filter = QComboBox()
         self.status_filter.addItems(["All", "Locked", "Unlocked"])
         self.status_filter.setFixedHeight(28)
-        self.status_filter.setStyleSheet("QComboBox { border: 1px solid #d1d5db; border-radius: 4px; padding: 0 8px; background: white; }")
+        self.status_filter.setStyleSheet("QComboBox { border: 1px solid #d1d5db; border-radius: 4px; padding: 0 8px; background: white; color: #111827; } QComboBox QAbstractItemView { color: #111827; background: white; }")
         self.status_filter.currentTextChanged.connect(self.apply_filters)
         bot_ctrl_layout.addWidget(self.status_filter)
 
@@ -207,6 +212,7 @@ class Dashboard(QMainWindow):
             QTableWidget {
                 background-color: #ffffff;
                 alternate-background-color: #f9fafb;
+                color: #111827;
                 border: 1px solid #e5e7eb;
                 gridline-color: transparent;
                 selection-background-color: #cce8ff;
@@ -283,6 +289,7 @@ class Dashboard(QMainWindow):
             # Name
             name_item = QTableWidgetItem(app.display_name)
             name_item.setToolTip(app.display_name)
+            name_item.setForeground(QColor("#111827"))
             
             # Extract icon natively using Qt
             file_info = QFileInfo(app.path)
