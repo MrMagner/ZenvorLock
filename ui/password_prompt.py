@@ -275,13 +275,27 @@ class PasswordPrompt:
 
         # ── Titles ─────────────────────────────────────────────────
         app_label = self.locked_app.display_name or self.locked_app.app_name
+        
+        title_frame = tk.Frame(body, bg="#ffffff")
+        title_frame.pack(pady=(0, 8))
+        
         tk.Label(
-            body,
+            title_frame,
             text=f"'{app_label}' is locked",
             font=(_FONT_FAMILY, 14, "bold"),
             bg="#ffffff",
             fg=_FG_TITLE,
-        ).pack(pady=(0, 8))
+        ).pack(side=tk.LEFT)
+
+        if self.locked_app.app_path and str(self.locked_app.app_path).lower().endswith(".exe"):
+            try:
+                from security.authenticode import is_executable_signed
+                if is_executable_signed(self.locked_app.app_path):
+                    tk.Label(title_frame, text=" \u2714\ufe0f", font=("Segoe UI", 12), fg="#10b981", bg="#ffffff").pack(side=tk.LEFT)
+                else:
+                    tk.Label(title_frame, text=" \u26a0\ufe0f Unsigned", font=("Segoe UI", 9, "bold"), fg="#ef4444", bg="#ffffff").pack(side=tk.LEFT, padx=(5,0), pady=(4,0))
+            except Exception:
+                pass
 
         tk.Label(
             body,
