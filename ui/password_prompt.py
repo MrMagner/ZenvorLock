@@ -160,6 +160,72 @@ def _create_styled_button(
     return btn
 
 
+def _create_app_icon(icon_path: str | None):
+    if not icon_path:
+        return None
+    try:
+        from pathlib import Path
+        path = Path(icon_path)
+        if "WindowsApps" in path.parts and path.suffix.lower() == ".exe":
+            try:
+                idx = path.parts.index("WindowsApps")
+                pkg_root = Path(*path.parts[:idx+2])
+                assets = pkg_root / "Assets"
+                if assets.exists():
+                    for pattern in ["*StoreLogo*.scale-200.png", "*StoreLogo*.png", "*Logo*.png", "*.png"]:
+                        matches = list(assets.rglob(pattern))
+                        if matches:
+                            icon_path = str(matches[0])
+                            break
+            except Exception:
+                pass
+
+        import win32ui, win32gui, win32con, win32api
+        from PIL import Image, ImageTk, ImageDraw
+        
+        img = None
+        if icon_path.lower().endswith(('.png', '.jpg', '.jpeg', '.ico')):
+            img = Image.open(icon_path).convert("RGBA")
+            img = img.resize((64, 64), Image.Resampling.LANCZOS)
+        else:
+            large, small = win32gui.ExtractIconEx(icon_path, 0)
+            if large:
+                hicon = large[0]
+                size = 64
+                hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
+                hbmp = win32ui.CreateBitmap()
+                hbmp.CreateCompatibleBitmap(hdc, size, size)
+                hdc_comp = hdc.CreateCompatibleDC()
+                hdc_comp.SelectObject(hbmp)
+                hdc_comp.FillSolidRect((0,0,size,size), win32api.RGB(238, 242, 255))
+                win32gui.DrawIconEx(hdc_comp.GetSafeHdc(), 0, 0, hicon, size, size, 0, None, win32con.DI_NORMAL)
+                
+                bmpinfo = hbmp.GetInfo()
+                bmpstr = hbmp.GetBitmapBits(True)
+                img = Image.frombuffer('RGB', (bmpinfo['bmWidth'], bmpinfo['bmHeight']), bmpstr, 'raw', 'BGRX', 0, 1)
+                img = img.convert('RGBA')
+                win32gui.DestroyIcon(hicon)
+                for h in small: win32gui.DestroyIcon(h)
+        
+        if img:
+            size = 64
+            final_img = Image.new("RGBA", (size, size), (255,255,255,0))
+            draw_bg = ImageDraw.Draw(final_img)
+            draw_bg.ellipse((0, 0, size, size), fill="#eef2ff")
+            
+            final_img.alpha_composite(img)
+            
+            mask = Image.new("L", (size, size), 0)
+            draw = ImageDraw.Draw(mask)
+            draw.ellipse((0, 0, size, size), fill=255)
+            final_img.putalpha(mask)
+            
+            return ImageTk.PhotoImage(final_img)
+    except Exception:
+        pass
+    return None
+
+
 class PasswordPrompt:
     """Styled password prompt shown when a locked app is intercepted."""
 
@@ -190,44 +256,75 @@ class PasswordPrompt:
         except Exception:
             pass
 
-        # ── Header section ───────────────────────────────────────────────
-        header = tk.Frame(self.root, bg=_BG_HEADER)
-        header.pack(fill=tk.X)
+        # ── Icon section ───────────────────────────────────────────────
+        self.app_icon = _create_app_icon(self.locked_app.app_path)
 
-        tk.Label(
-            header,
-            text=_LOCK_ICON,
-            font=(_FONT_FAMILY, 20),
-            bg=_BG_HEADER,
-            fg=_BTN_PRIMARY_BG,
-        ).pack(pady=(16, 4))
+        body = tk.Frame(self.root, bg="#ffffff")
+        body.pack(fill=tk.BOTH, expand=True, padx=40, pady=(24, 24))
 
+        icon_frame = tk.Frame(body, bg="#ffffff")
+        icon_frame.pack(pady=(0, 16))
+        
+        if self.app_icon:
+            tk.Label(icon_frame, image=self.app_icon, bg="#ffffff").pack()
+        else:
+            canvas = tk.Canvas(icon_frame, width=80, height=80, bg="#ffffff", highlightthickness=0)
+            canvas.pack()
+            canvas.create_oval(10, 10, 70, 70, fill="#eef2ff", outline="#eef2ff")
+            canvas.create_text(40, 40, text="\U0001f512", font=("Segoe UI", 24), fill="#1f6feb")
+
+        # ── Titles ─────────────────────────────────────────────────
         app_label = self.locked_app.display_name or self.locked_app.app_name
         tk.Label(
-            header,
+            body,
             text=f"'{app_label}' is locked",
-            font=(_FONT_FAMILY, 12, "bold"),
-            bg=_BG_HEADER,
+            font=(_FONT_FAMILY, 14, "bold"),
+            bg="#ffffff",
             fg=_FG_TITLE,
-        ).pack(pady=(0, 14))
-
-        # ── Body section ─────────────────────────────────────────────────
-        body = tk.Frame(self.root, bg=_BG)
-        body.pack(fill=tk.BOTH, expand=True, padx=32, pady=(20, 0))
+        ).pack(pady=(0, 8))
 
         tk.Label(
             body,
-            text="Enter Master Password",
+            text="Enter the master password to unlock the application.",
             font=(_FONT_FAMILY, 9),
-            bg=_BG,
+            bg="#ffffff",
             fg=_FG_SUBTITLE,
-            anchor=tk.W,
-        ).pack(fill=tk.X, pady=(0, 6))
+            anchor=tk.CENTER,
+            justify=tk.CENTER,
+            wraplength=340
+        ).pack(pady=(0, 20))
 
-        self.password_entry = _create_styled_entry(body)
-        _pack_styled_entry(self.password_entry, fill=tk.X, pady=(0, 6))
-        self.password_entry.bind("<Return>", lambda event: self.on_submit())
-        self.root.after(75, self._focus_password_entry)
+        # ── Password Field ─────────────────────────────────────────
+        field_frame = tk.Frame(body, bg="#ffffff", highlightbackground="#d1d5db", highlightthickness=1)
+        field_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.entry_var = tk.StringVar()
+        self.password_entry = tk.Entry(field_frame, textvariable=self.entry_var, font=("Segoe UI", 10), show="*", bd=0, highlightthickness=0, bg="#ffffff", fg="#111827", insertbackground="#111827")
+        self.password_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=12, ipady=8)
+        
+        self.placeholder = "Enter master password"
+        def on_focus_in(e):
+            if self.entry_var.get() == self.placeholder:
+                self.password_entry.delete(0, tk.END)
+                self.password_entry.config(fg="#111827", show="*")
+        def on_focus_out(e):
+            if not self.entry_var.get():
+                self.password_entry.insert(0, self.placeholder)
+                self.password_entry.config(fg="#9ca3af", show="")
+        
+        self.password_entry.insert(0, self.placeholder)
+        self.password_entry.config(fg="#9ca3af", show="")
+        self.password_entry.bind("<FocusIn>", on_focus_in)
+        self.password_entry.bind("<FocusOut>", on_focus_out)
+        self.password_entry.bind("<Return>", lambda e: self.on_submit())
+        
+        eye_lbl = tk.Label(field_frame, text="\U0001f441\ufe0f", font=("Segoe UI", 11), bg="#ffffff", fg="#6b7280", cursor="hand2")
+        eye_lbl.pack(side=tk.RIGHT, padx=12)
+        def toggle_eye(e):
+            if self.entry_var.get() != self.placeholder:
+                current = self.password_entry.cget("show")
+                self.password_entry.config(show="" if current == "*" else "*")
+        eye_lbl.bind("<Button-1>", toggle_eye)
 
         # ── Status / error label ─────────────────────────────────────────
         self.status_var = tk.StringVar(value="")
@@ -236,32 +333,39 @@ class PasswordPrompt:
             textvariable=self.status_var,
             font=(_FONT_FAMILY, 9),
             fg=_FG_ERROR,
-            bg=_BG,
-            wraplength=380,
-            justify=tk.LEFT,
-            anchor=tk.W,
-        ).pack(fill=tk.X, pady=(2, 0))
+            bg="#ffffff",
+            wraplength=340,
+            justify=tk.CENTER,
+            anchor=tk.CENTER,
+        ).pack(fill=tk.X, pady=(0, 8))
 
         # ── Buttons ──────────────────────────────────────────────────────
-        btn_frame = tk.Frame(self.root, bg=_BG)
-        btn_frame.pack(fill=tk.X, padx=32, pady=(16, 24))
+        btn_frame = tk.Frame(body, bg="#ffffff")
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        btn_frame.grid_columnconfigure(0, weight=1)
+        btn_frame.grid_columnconfigure(1, weight=1)
 
-        self.submit_button = _create_styled_button(
-            btn_frame, "Unlock", self.on_submit, primary=True
+        self.submit_button = tk.Button(
+            btn_frame, text="Unlock", font=("Segoe UI", 9, "bold"),
+            bg="#1f6feb", fg="#ffffff", activebackground="#1a5ecf", activeforeground="#ffffff",
+            bd=0, cursor="hand2", command=self.on_submit
         )
-        self.submit_button.pack(side=tk.LEFT, padx=(0, 10))
+        self.submit_button.grid(row=0, column=0, sticky="ew", padx=(0, 8), ipady=6)
 
-        _create_styled_button(
-            btn_frame, "Cancel", self.on_cancel, primary=False
-        ).pack(side=tk.LEFT)
+        tk.Button(
+            btn_frame, text="Cancel", font=("Segoe UI", 9),
+            bg="#f3f4f6", fg="#374151", activebackground="#e5e7eb", activeforeground="#374151",
+            bd=0, cursor="hand2", command=self.on_cancel
+        ).grid(row=0, column=1, sticky="ew", padx=(8, 0), ipady=6)
 
-        # ── Auto-fit window to content, then center ──────────────────────
-        _auto_fit_and_center(self.root, min_width=_MIN_WIDTH_PROMPT)
-
+        _auto_fit_and_center(self.root, min_width=440)
         self._refresh_lockout_state()
+        
+        self.root.after(100, lambda: self.password_entry.focus_set())
 
     def _focus_password_entry(self) -> None:
-        _focus_password_entry(self.password_entry)
+        self.password_entry.focus_set()
 
     def _cancel_lockout_refresh(self) -> None:
         if self._lockout_job and self.root.winfo_exists():
@@ -307,6 +411,9 @@ class PasswordPrompt:
         if self._refresh_lockout_state(notify=True):
             return
 
+        if self.entry_var.get() == self.placeholder:
+            self.password_entry.delete(0, tk.END)
+
         password = self.password_entry.get()
         self.password_entry.delete(0, tk.END)
         if verify_master_password(password):
@@ -314,13 +421,12 @@ class PasswordPrompt:
             self.root.destroy()
             self.callback(True, self.locked_app)
         else:
-            password = ""
             if self._refresh_lockout_state(notify=True):
                 return
             else:
                 messagebox.showerror("Error", "Incorrect password", parent=self.root)
                 self.password_entry.delete(0, tk.END)
-                self.root.after(75, self._focus_password_entry)
+                self.root.after(75, self.password_entry.focus_set)
 
     def on_cancel(self):
         if self._dismissed:
@@ -340,15 +446,17 @@ class MasterPasswordDialog:
         title: str,
         message: str,
         action_label: str,
+        icon_path: str | None = None,
     ):
         self.parent = parent
         self.result = False
         self._lockout_job: str | None = None
+        self._dismissed = False
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(title)
         self.dialog.resizable(False, False)
-        self.dialog.configure(bg=_BG)
+        self.dialog.configure(bg="#ffffff")
 
         if bool(int(parent.winfo_viewable())):
             self.dialog.transient(parent)
@@ -357,48 +465,74 @@ class MasterPasswordDialog:
         self.dialog.focus_force()
         self.dialog.protocol("WM_DELETE_WINDOW", self.close)
 
-        # ── Header section ───────────────────────────────────────────────
-        header = tk.Frame(self.dialog, bg=_BG_HEADER)
-        header.pack(fill=tk.X)
+        body = tk.Frame(self.dialog, bg="#ffffff")
+        body.pack(fill=tk.BOTH, expand=True, padx=40, pady=(24, 24))
 
-        header_content = tk.Frame(header, bg=_BG_HEADER)
-        header_content.pack(pady=(16, 14))
+        # ── Icon section ───────────────────────────────────────────────
+        self.app_icon = _create_app_icon(icon_path)
 
+        icon_frame = tk.Frame(body, bg="#ffffff")
+        icon_frame.pack(pady=(0, 16))
+        
+        if self.app_icon:
+            tk.Label(icon_frame, image=self.app_icon, bg="#ffffff").pack()
+        else:
+            canvas = tk.Canvas(icon_frame, width=80, height=80, bg="#ffffff", highlightthickness=0)
+            canvas.pack()
+            canvas.create_oval(10, 10, 70, 70, fill="#eef2ff", outline="#eef2ff")
+            canvas.create_text(40, 40, text="\U0001f512", font=("Segoe UI", 24), fill="#1f6feb")
+
+        # ── Titles ─────────────────────────────────────────────────
         tk.Label(
-            header_content,
-            text=_LOCK_ICON,
-            font=(_FONT_FAMILY, 16),
-            bg=_BG_HEADER,
-            fg=_BTN_PRIMARY_BG,
-        ).pack(side=tk.LEFT, padx=(0, 10))
-
-        tk.Label(
-            header_content,
+            body,
             text=title,
-            font=(_FONT_FAMILY, 12, "bold"),
-            bg=_BG_HEADER,
+            font=(_FONT_FAMILY, 14, "bold"),
+            bg="#ffffff",
             fg=_FG_TITLE,
-        ).pack(side=tk.LEFT)
-
-        # ── Body section ─────────────────────────────────────────────────
-        body = tk.Frame(self.dialog, bg=_BG)
-        body.pack(fill=tk.BOTH, expand=True, padx=32, pady=(16, 0))
+        ).pack(pady=(0, 8))
 
         tk.Label(
             body,
             text=message,
-            font=(_FONT_FAMILY, 10),
-            bg=_BG,
+            font=(_FONT_FAMILY, 9),
+            bg="#ffffff",
             fg=_FG_SUBTITLE,
-            anchor=tk.W,
-            wraplength=360,
-            justify=tk.LEFT,
-        ).pack(fill=tk.X, pady=(0, 12))
+            anchor=tk.CENTER,
+            justify=tk.CENTER,
+            wraplength=340
+        ).pack(pady=(0, 20))
 
-        self.password_entry = _create_styled_entry(body)
-        _pack_styled_entry(self.password_entry, fill=tk.X, pady=(0, 6))
-        self.password_entry.bind("<Return>", lambda event: self.submit())
-        self.dialog.after(75, self._focus_password_entry)
+        # ── Password Field ─────────────────────────────────────────
+        field_frame = tk.Frame(body, bg="#ffffff", highlightbackground="#d1d5db", highlightthickness=1)
+        field_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.entry_var = tk.StringVar()
+        self.password_entry = tk.Entry(field_frame, textvariable=self.entry_var, font=("Segoe UI", 10), show="*", bd=0, highlightthickness=0, bg="#ffffff", fg="#111827", insertbackground="#111827")
+        self.password_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=12, ipady=8)
+        
+        self.placeholder = "Enter master password"
+        def on_focus_in(e):
+            if self.entry_var.get() == self.placeholder:
+                self.password_entry.delete(0, tk.END)
+                self.password_entry.config(fg="#111827", show="*")
+        def on_focus_out(e):
+            if not self.entry_var.get():
+                self.password_entry.insert(0, self.placeholder)
+                self.password_entry.config(fg="#9ca3af", show="")
+        
+        self.password_entry.insert(0, self.placeholder)
+        self.password_entry.config(fg="#9ca3af", show="")
+        self.password_entry.bind("<FocusIn>", on_focus_in)
+        self.password_entry.bind("<FocusOut>", on_focus_out)
+        self.password_entry.bind("<Return>", lambda e: self.submit())
+        
+        eye_lbl = tk.Label(field_frame, text="\U0001f441\ufe0f", font=("Segoe UI", 11), bg="#ffffff", fg="#6b7280", cursor="hand2")
+        eye_lbl.pack(side=tk.RIGHT, padx=12)
+        def toggle_eye(e):
+            if self.entry_var.get() != self.placeholder:
+                current = self.password_entry.cget("show")
+                self.password_entry.config(show="" if current == "*" else "*")
+        eye_lbl.bind("<Button-1>", toggle_eye)
 
         # ── Status / error label ─────────────────────────────────────────
         self.status_var = tk.StringVar(value="")
@@ -407,32 +541,40 @@ class MasterPasswordDialog:
             textvariable=self.status_var,
             font=(_FONT_FAMILY, 9),
             fg=_FG_ERROR,
-            bg=_BG,
-            wraplength=360,
-            justify=tk.LEFT,
-            anchor=tk.W,
-        ).pack(fill=tk.X, pady=(2, 0))
+            bg="#ffffff",
+            wraplength=340,
+            justify=tk.CENTER,
+            anchor=tk.CENTER,
+        ).pack(fill=tk.X, pady=(0, 8))
 
         # ── Buttons ──────────────────────────────────────────────────────
-        btn_frame = tk.Frame(self.dialog, bg=_BG)
-        btn_frame.pack(fill=tk.X, padx=32, pady=(16, 24))
+        btn_frame = tk.Frame(body, bg="#ffffff")
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        btn_frame.grid_columnconfigure(0, weight=1)
+        btn_frame.grid_columnconfigure(1, weight=1)
 
-        self.submit_button = _create_styled_button(
-            btn_frame, action_label, self.submit, primary=True
+        self.submit_button = tk.Button(
+            btn_frame, text=action_label, font=("Segoe UI", 9, "bold"),
+            bg="#1f6feb", fg="#ffffff", activebackground="#1a5ecf", activeforeground="#ffffff",
+            bd=0, cursor="hand2", command=self.submit
         )
-        self.submit_button.pack(side=tk.LEFT, padx=(0, 10))
+        self.submit_button.grid(row=0, column=0, sticky="ew", padx=(0, 8), ipady=6)
 
-        _create_styled_button(
-            btn_frame, "Cancel", self.close, primary=False
-        ).pack(side=tk.LEFT)
+        tk.Button(
+            btn_frame, text="Cancel", font=("Segoe UI", 9),
+            bg="#f3f4f6", fg="#374151", activebackground="#e5e7eb", activeforeground="#374151",
+            bd=0, cursor="hand2", command=self.close
+        ).grid(row=0, column=1, sticky="ew", padx=(8, 0), ipady=6)
 
-        # ── Auto-fit window to content, then center ──────────────────────
-        _auto_fit_and_center(self.dialog, parent, min_width=_MIN_WIDTH_DIALOG)
-
+        _auto_fit_and_center(self.dialog, parent, min_width=440)
         self._refresh_lockout_state()
+        
+        # Focus appropriately
+        self.dialog.after(100, lambda: self.password_entry.focus_set())
 
     def _focus_password_entry(self) -> None:
-        _focus_password_entry(self.password_entry)
+        self.password_entry.focus_set()
 
     def _cancel_lockout_refresh(self) -> None:
         if self._lockout_job and self.dialog.winfo_exists():
@@ -443,7 +585,6 @@ class MasterPasswordDialog:
         if enabled:
             self.password_entry.configure(state=tk.NORMAL)
             self.submit_button.configure(state=tk.NORMAL, cursor="hand2")
-            self.dialog.after(75, self._focus_password_entry)
             return
 
         self.password_entry.configure(state=tk.NORMAL)
@@ -478,6 +619,9 @@ class MasterPasswordDialog:
         if self._refresh_lockout_state(notify=True):
             return
 
+        if self.entry_var.get() == self.placeholder:
+            self.password_entry.delete(0, tk.END)
+
         password = self.password_entry.get()
         self.password_entry.delete(0, tk.END)
         if verify_master_password(password):
@@ -486,15 +630,17 @@ class MasterPasswordDialog:
             self.dialog.destroy()
             return
 
-        password = ""
         if self._refresh_lockout_state(notify=True):
             return
         else:
             messagebox.showerror("Error", "Incorrect password", parent=self.dialog)
             self.password_entry.delete(0, tk.END)
-            self.dialog.after(75, self._focus_password_entry)
+            self.dialog.after(75, self.password_entry.focus_set)
 
     def close(self):
+        if self._dismissed:
+            return
+        self._dismissed = True
         self.result = False
         self._cancel_lockout_refresh()
         self.dialog.destroy()
@@ -505,9 +651,10 @@ def prompt_for_master_password(
     title: str = "Authentication Required",
     message: str = "Enter Master Password:",
     action_label: str = "Verify",
+    icon_path: str | None = None,
 ) -> bool:
     dialog = MasterPasswordDialog(
-        parent, title=title, message=message, action_label=action_label
+        parent, title=title, message=message, action_label=action_label, icon_path=icon_path
     )
     parent.wait_window(dialog.dialog)
     return dialog.result

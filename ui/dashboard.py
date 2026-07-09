@@ -744,17 +744,17 @@ class Dashboard(tk.Toplevel):
         ).pack(pady=(0, 20))
 
         # Policy Box
-        policy_frame = tk.Frame(main_container, bg="#faf8ff", highlightbackground="#e9e3ff", highlightthickness=1)
+        policy_frame = tk.Frame(main_container, bg="#f0f4fa", highlightbackground="#d0ddf5", highlightthickness=1)
         policy_frame.pack(fill=tk.X, pady=(0, 20))
         
-        policy_inner = tk.Frame(policy_frame, bg="#faf8ff")
+        policy_inner = tk.Frame(policy_frame, bg="#f0f4fa")
         policy_inner.pack(padx=16, pady=12)
         tk.Label(
             policy_inner,
             text="🛡\ufe0f Use at least 12 characters and include all of these:\nuppercase letters, lowercase letters, numbers, and symbols.",
             font=("Segoe UI", 9),
-            bg="#faf8ff",
-            fg="#5b21b6",
+            bg="#f0f4fa",
+            fg="#1f6feb",
             justify=tk.CENTER
         ).pack()
 
@@ -834,9 +834,9 @@ class Dashboard(tk.Toplevel):
             main_container,
             text="\U0001f512 Save Password",
             font=("Segoe UI", 10, "bold"),
-            bg="#5b21b6",
+            bg="#1f6feb",
             fg="#ffffff",
-            activebackground="#4c1d95",
+            activebackground="#1a5ecf",
             activeforeground="#ffffff",
             bd=0,
             cursor="hand2",
@@ -1339,6 +1339,7 @@ class Dashboard(tk.Toplevel):
             title="Lock Custom Path",
             message="Enter the master password to lock the selected application.",
             action_label="Lock",
+            icon_path=normalized_path,
         ):
             return
 
@@ -1549,11 +1550,13 @@ class Dashboard(tk.Toplevel):
             )
             return
 
+        icon_path = selected_apps[0].icon_path if len(selected_apps) == 1 else None
         if not prompt_for_master_password(
             self,
             title="Lock Applications",
             message="Enter the master password to lock the selected applications.",
             action_label="Lock",
+            icon_path=icon_path,
         ):
             return
 
@@ -1581,11 +1584,13 @@ class Dashboard(tk.Toplevel):
             )
             return
 
+        icon_path = selected_apps[0].icon_path if len(selected_apps) == 1 else None
         if not prompt_for_master_password(
             self,
             title="Unlock Applications",
             message="Enter the master password to unlock the selected applications.",
             action_label="Unlock",
+            icon_path=icon_path,
         ):
             return
 
