@@ -45,7 +45,7 @@ class MasterPasswordDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setFixedSize(460, 260)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setWindowFlags((self.windowFlags() & ~Qt.WindowContextHelpButtonHint) | Qt.WindowStaysOnTopHint)
         self.setStyleSheet(f"background-color: {_BG};")
 
         layout = QVBoxLayout(self)
