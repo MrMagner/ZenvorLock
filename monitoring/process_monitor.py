@@ -16,6 +16,43 @@ from app_utils.software_inventory import normalize_path
 from security.policy_integrity import PolicyIntegrityError
 from security.audit import log_security_event
 
+TH32CS_SNAPPROCESS = 0x00000002
+
+class PROCESSENTRY32(ctypes.Structure):
+    _fields_ = [
+        ('dwSize', ctypes.wintypes.DWORD),
+        ('cntUsage', ctypes.wintypes.DWORD),
+        ('th32ProcessID', ctypes.wintypes.DWORD),
+        ('th32DefaultHeapID', ctypes.POINTER(ctypes.wintypes.ULONG)),
+        ('th32ModuleID', ctypes.wintypes.DWORD),
+        ('cntThreads', ctypes.wintypes.DWORD),
+        ('th32ParentProcessID', ctypes.wintypes.DWORD),
+        ('pcPriClassBase', ctypes.wintypes.LONG),
+        ('dwFlags', ctypes.wintypes.DWORD),
+        ('szExeFile', ctypes.c_char * 260),
+    ]
+
+def _get_fast_pids() -> set[int]:
+    try:
+        kernel32 = ctypes.windll.kernel32
+        hProcessSnap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if hProcessSnap == -1:
+            return set()
+            
+        pe32 = PROCESSENTRY32()
+        pe32.dwSize = ctypes.sizeof(PROCESSENTRY32)
+        
+        procs = set()
+        if kernel32.Process32First(hProcessSnap, ctypes.byref(pe32)):
+            procs.add(pe32.th32ProcessID)
+            while kernel32.Process32Next(hProcessSnap, ctypes.byref(pe32)):
+                procs.add(pe32.th32ProcessID)
+                
+        kernel32.CloseHandle(hProcessSnap)
+        return procs
+    except Exception:
+        return set()
+
 _PID_ACCESS_DENIED = object()
 
 
@@ -55,6 +92,7 @@ class ProcessMonitor:
         self._state_lock = threading.RLock()
         self._last_db_refresh = 0.0
         self._monitor_start_time: float | None = None
+        self._known_pids: set[int] = _get_fast_pids()
 
     def mark_monitoring_started(self):
         """Record the time when monitoring begins. Processes started before this
@@ -396,12 +434,22 @@ class ProcessMonitor:
 
         intercepted_apps: dict[str, tuple[LockedAppRecord, list[psutil.Process], bool]] = {}
 
-        for proc in psutil.process_iter(["pid", "name", "exe", "ppid", "create_time"]):
+        current_pids = _get_fast_pids()
+        if not current_pids:
+            return
+            
+        new_pids = current_pids - self._known_pids
+        self._known_pids = current_pids
+
+        if not new_pids:
+            return
+
+        for pid in new_pids:
             try:
-                pid = proc.info.get("pid")
-                name = (proc.info.get("name") or "").strip()
-                exe_path = normalize_path(proc.info.get("exe"))
-                create_time = proc.info.get("create_time")
+                proc = psutil.Process(pid)
+                name = (proc.name() or "").strip()
+                exe_path = normalize_path(proc.exe())
+                create_time = proc.create_time()
 
                 if create_time is not None and self._monitor_start_time is not None:
                     if create_time < self._monitor_start_time:
