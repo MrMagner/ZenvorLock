@@ -232,7 +232,7 @@ def ensure_administrator_session() -> str:
             executable,
             parameters,
             None,
-            0,
+            1,
         )
         if int(result) > 32:
             return "relaunched"
