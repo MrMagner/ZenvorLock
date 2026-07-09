@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QMessageBox
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont, QIcon, QColor
 
 from app_utils.software_inventory import build_software_inventory, InventoryApp
 from app_utils.locked_apps_repository import list_locked_apps, lock_apps, unlock_apps
@@ -112,7 +112,8 @@ class Dashboard(QMainWindow):
 
     def refresh_inventory(self):
         self.table.setRowCount(0)
-        self.inventory_apps = list(build_software_inventory())
+        locked_apps = list_locked_apps()
+        self.inventory_apps = list(build_software_inventory(locked_apps))
         
         self.table.setRowCount(len(self.inventory_apps))
         for row, app in enumerate(self.inventory_apps):
