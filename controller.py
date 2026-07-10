@@ -5,9 +5,7 @@ import subprocess
 import threading
 import time
 from pathlib import PureWindowsPath
-
-from PySide6.QtCore import QObject, Signal, QThread, QTimer
-from PySide6.QtWidgets import QMessageBox
+from tkinter import messagebox
 
 import psutil
 
@@ -22,12 +20,10 @@ from security.audit import log_security_event
 AUTHORIZED_LAUNCH_GRACE = 2.0
 
 
-class Controller(QObject):
-    intercept_triggered = Signal(object)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
+class Controller:
+    def __init__(self, ui_queue):
         self.monitor = ProcessMonitor()
+        self.ui_queue = ui_queue
         self.running = False
         self.thread = None
         self.prompting_apps = set()
@@ -81,7 +77,7 @@ class Controller(QObject):
             self.prompting_apps.update(tracked_aliases)
 
         logger.info("Queueing UI prompt for %s", locked_app.app_name)
-        self.intercept_triggered.emit(locked_app)
+        self.ui_queue.put("PROMPT", locked_app)
 
     CANCEL_COOLDOWN = 5.0
 
@@ -182,7 +178,7 @@ class Controller(QObject):
                     raise exc2
         except Exception as exc:
             logger.error("Failed to start %s: %s", target.app_name, exc)
-            QMessageBox.critical(None, "Error", f"Failed to launch {target.app_name}: {exc}")
+            messagebox.showerror("Error", f"Failed to launch {target.app_name}: {exc}")
             return False
 
     def _is_windows_store_app_path(self, path: str) -> bool:
@@ -247,8 +243,7 @@ class Controller(QObject):
         amuid = self._resolve_amuid(path)
         if not amuid:
             logger.error("Unable to resolve Windows Store AMUID for %s", path)
-            QMessageBox.critical(
-                None,
+            messagebox.showerror(
                 "Launch Failed",
                 f"Failed to launch {target.display_name}. Ensure it is installed correctly.",
             )

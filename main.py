@@ -7,26 +7,22 @@ import sys
 import time
 import ctypes
 
-
+import pystray
 import psutil
 from PIL import Image, ImageTk
 
 from app_utils.locked_apps_repository import LockedAppRecord, list_locked_apps
 from app_utils.logger import logger
 from app_utils.paths import APP_DISPLAY_NAME, get_data_dir
-
+from app_utils.secure_queue import SecureQueue
 from app_utils.startup import BACKGROUND_ARG, ensure_startup_shortcut, ensure_start_menu_shortcut, is_background_launch
-
+from app_utils.tk_runtime import bootstrap_tk_runtime, relaunch_with_compatible_python
 from config.config_manager import checkpoint_database, get_connection, init_db
 
+bootstrap_tk_runtime()
 
-
-
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMessageBox
-from PySide6.QtGui import QIcon, QAction, QPixmap
-from PySide6.QtCore import Qt, QTimer, Slot, QObject
-
-
+import tkinter as tk
+from tkinter import messagebox
 
 from controller import Controller
 from security.auth_manager import (
@@ -232,7 +228,7 @@ def ensure_administrator_session() -> str:
             executable,
             parameters,
             None,
-            1,
+            0,
         )
         if int(result) > 32:
             return "relaunched"
@@ -362,21 +358,24 @@ def run_watchdog(parent_pid: int, parent_started_at: float) -> None:
         time.sleep(1.0)
 
 
-
-class SecureAppLocker(QObject):
+class SecureAppLocker:
     def __init__(self):
-        super().__init__()
         init_db()
 
-        self.app = QApplication.instance() or QApplication(sys.argv)
-        self.app.setQuitOnLastWindowClosed(False)
+        self.ui_queue = SecureQueue()
+        self.controller = Controller(self.ui_queue)
 
-        self.controller = Controller()
-        self.controller.intercept_triggered.connect(self.show_password_prompt)
+        self.root = tk.Tk()
+        self._set_windows_app_id()
+        self.app_icons = self._load_window_icons()
+        if self.app_icons:
+            self.root.iconphoto(True, *self.app_icons)
+        self.root.withdraw()
+        self.root.protocol("WM_DELETE_WINDOW", self.request_exit)
 
         self.dashboard = None
-        self._active_prompt_dialog = None
-        self._startup_error = ''
+        self._active_prompt_dialog: tk.Toplevel | None = None
+        self._startup_error = ""
         self._dashboard_authenticated = False
 
         ok, message = prepare_auth_runtime()
@@ -390,125 +389,213 @@ class SecureAppLocker(QObject):
                 finally:
                     conn.close()
                 list_locked_apps()
+            except AuditIntegrityError:
+                self._startup_error = "The security audit trail appears to have been modified outside the app."
+            except PolicyIntegrityError:
+                self._startup_error = "The locked-application policy appears to have been modified outside the app."
             except Exception as exc:
-                logger.error('Startup error: %s', exc)
-                self._startup_error = 'Failed to validate the locked-application policy.'
+                logger.error("Error validating startup lock policy: %s", exc)
+                self._startup_error = (
+                    "Failed to validate the locked-application policy."
+                )
 
-        self._watchdog_process = None
+        self._watchdog_process: subprocess.Popen | None = None
 
-        # System Tray
-        self.tray_icon = QSystemTrayIcon(self)
-        
-        # Load tray icon image
-        icon_path = resolve_asset_path('app_icon.png')
-        if icon_path.exists():
-            self.tray_icon.setIcon(QIcon(str(icon_path)))
-        
-        tray_menu = QMenu()
-        
-        dashboard_action = QAction('Dashboard', self)
-        dashboard_action.triggered.connect(self.show_dashboard)
-        tray_menu.addAction(dashboard_action)
-        
-        exit_action = QAction('Exit', self)
-        exit_action.triggered.connect(self.request_exit)
-        tray_menu.addAction(exit_action)
-        
-        self.tray_icon.setContextMenu(tray_menu)
-        self.tray_icon.show()
+        self.icon = pystray.Icon(
+            "SecureAppLocker",
+            load_tray_icon(),
+            APP_DISPLAY_NAME,
+            menu=pystray.Menu(
+                pystray.MenuItem("Dashboard", self.show_dashboard),
+                pystray.MenuItem("Exit", self.request_exit),
+            ),
+        )
 
-        # Check for single instance notification
-        self.poll_timer = QTimer(self)
-        self.poll_timer.timeout.connect(self.poll_queue)
-        self.poll_timer.start(500)
-
+        self.poll_queue()
         ensure_startup_shortcut()
         ensure_start_menu_shortcut()
 
+    def _set_windows_app_id(self):
+        try:
+            ctypes = __import__("ctypes")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "SecureAppLocker.App"
+            )
+        except Exception:
+            pass
+
+    def _load_window_icons(self):
+        sizes = [
+            (16, 16),
+            (24, 24),
+            (32, 32),
+            (48, 48),
+            (64, 64),
+            (128, 128),
+            (256, 256),
+        ]
+        photos = []
+        for size in sizes:
+            img = load_app_icon_image(size)
+            if img:
+                photos.append(ImageTk.PhotoImage(img))
+        return photos
+
     def poll_queue(self):
         try:
-            req_file = get_data_dir() / '.open_dashboard'
+            req_file = get_data_dir() / ".open_dashboard"
             if req_file.exists():
                 try:
                     req_file.unlink()
                 except OSError:
                     pass
-                if self._watchdog_process is not None:
-                    self.show_dashboard()
-        except Exception as exc:
+                self.show_dashboard()
+        except Exception:
             pass
 
-    @Slot(object)
-    def show_password_prompt(self, locked_app):
-        if self._active_prompt_dialog is not None:
+        try:
+            while True:
+                msg, payload = self.ui_queue.get_nowait()
+                if not msg:
+                    break
+                if msg == "PROMPT":
+                    if (
+                        self._active_prompt_dialog is not None
+                        and self._active_prompt_dialog.winfo_exists()
+                    ):
+                        self.ui_queue.put("PROMPT", payload)
+                        break
+                    if not self.controller.prompt_in_progress:
+                        if self._active_prompt_dialog is None:
+                            self.controller._process_pending_prompts()
+                        continue
+                    logger.info("Processing UI prompt for %s", payload.app_name)
+                    self.show_prompt(payload)
+                    break
+                elif msg == "EXIT_REQUEST":
+                    self.confirm_exit()
+        except queue.Empty:
+            pass
+        self.root.after(100, self.poll_queue)
+
+    def show_prompt(self, locked_app: LockedAppRecord):
+        if locked_app.integrity_issue:
+            log_security_event(
+                "RULE_TAMPER_DETECTED",
+                f"Blocked {locked_app.app_name} because the file identity at the locked path changed.",
+            )
+            messagebox.showerror(
+                "Launch Blocked",
+                locked_app.integrity_issue,
+                parent=self.dashboard or self.root,
+            )
+            self.controller.on_prompt_result(locked_app, False)
             return
 
-        logger.info('Showing password prompt for %s', locked_app.app_name)
+        if (
+            self._active_prompt_dialog is not None
+            and self._active_prompt_dialog.winfo_exists()
+        ):
+            logger.warning(
+                "Password dialog already active; deferring prompt for %s",
+                locked_app.app_name,
+            )
+            return
+
+        logger.info("Showing password prompt for %s", locked_app.app_name)
 
         def cb(success, app):
             self.controller.on_prompt_result(app, success)
             self._active_prompt_dialog = None
 
-        self._active_prompt_dialog = PasswordPrompt(None, locked_app, cb)
-        self._active_prompt_dialog.exec()
-        self._active_prompt_dialog = None
+        prompt_parent = self.root
+        if self.dashboard is not None and self.dashboard.winfo_exists():
+            prompt_parent = self.dashboard
 
-    def show_dashboard(self):
+        dialog = tk.Toplevel(prompt_parent)
+        if prompt_parent.winfo_exists() and bool(int(prompt_parent.winfo_viewable())):
+            dialog.transient(prompt_parent)
+        PasswordPrompt(dialog, locked_app, cb)
+        self._active_prompt_dialog = dialog
+
+    def show_dashboard(self, icon=None, item=None):
         if not self._dashboard_authenticated and not self.require_startup_access():
+            logger.info("Dashboard authentication cancelled.")
             return
         self._dashboard_authenticated = True
 
-        if self.dashboard is None:
-            self.dashboard = Dashboard(controller=self.controller)
-        
-        self.dashboard.show()
-        self.dashboard.raise_()
-        self.dashboard.activateWindow()
+        if self.dashboard is None or not self.dashboard.winfo_exists():
+            self.dashboard = Dashboard(self.root, controller=self.controller)
+            self.dashboard.protocol("WM_DELETE_WINDOW", self.hide_dashboard)
+        else:
+            self.dashboard.deiconify()
 
-    def request_exit(self):
-        self.confirm_exit()
+        self.dashboard.lift()
+        self.dashboard.attributes("-topmost", True)
+        self.dashboard.after(10, lambda: self.dashboard.attributes("-topmost", False))
+        self.dashboard.focus_force()
+
+    def hide_dashboard(self):
+        if self.dashboard and self.dashboard.winfo_exists():
+            self.dashboard.withdraw()
+
+    def request_exit(self, icon=None, item=None):
+        self.ui_queue.put("EXIT_REQUEST", None)
 
     def confirm_exit(self):
-        if getattr(self, '_exit_prompt_active', False):
+        if getattr(self, "_exit_prompt_active", False):
             return
 
         if is_master_password_set() or list_locked_apps():
             self._exit_prompt_active = True
             try:
                 success = prompt_for_master_password(
-                    None,
-                    title=f'Exit {APP_DISPLAY_NAME}',
-                    message=f'Enter the master password to exit {APP_DISPLAY_NAME}.',
-                    action_label='Exit',
+                    self.root,
+                    title=f"Exit {APP_DISPLAY_NAME}",
+                    message=f"Enter the master password to exit {APP_DISPLAY_NAME}.",
+                    action_label="Exit",
                 )
             finally:
                 self._exit_prompt_active = False
 
             if not success:
+                logger.info("Exit authentication cancelled.")
                 return
 
         self.perform_exit()
 
     def perform_exit(self):
+        logger.info("Exiting application...")
         _mark_intentional_exit()
 
         if self._watchdog_process is not None:
             try:
                 proc = psutil.Process(self._watchdog_process.pid)
                 proc.terminate()
-            except Exception:
+                try:
+                    proc.wait(timeout=3)
+                except psutil.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=2)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
                 pass
 
         self.controller.running = False
         try:
             checkpoint_database()
+        except Exception as exc:
+            logger.error("Failed to checkpoint database during shutdown: %s", exc)
+
+        release_single_instance_lock()
+
+        self.root.quit()
+        self.root.destroy()
+
+        try:
+            self.icon.visible = False
         except Exception:
             pass
 
-        release_single_instance_lock()
-        
-        self.tray_icon.hide()
-        QApplication.quit()
         os._exit(0)
 
     def require_startup_access(self) -> bool:
@@ -516,21 +603,24 @@ class SecureAppLocker(QObject):
             return True
 
         return prompt_for_master_password(
-            None,
-            title=f'Open {APP_DISPLAY_NAME}',
-            message=f'Enter the master password to open {APP_DISPLAY_NAME}.',
-            action_label='Open',
+            self.root,
+            title=f"Open {APP_DISPLAY_NAME}",
+            message=f"Enter the master password to open {APP_DISPLAY_NAME}.",
+            action_label="Open",
         )
 
     def run(self):
         if self._startup_error:
-            QMessageBox.critical(None, 'Security Error', self._startup_error)
-            QApplication.quit()
+            messagebox.showerror(
+                "Security Error", self._startup_error, parent=self.root
+            )
+            self.root.destroy()
             return
 
         background_launch = is_background_launch()
         if not background_launch and not self.require_startup_access():
-            QApplication.quit()
+            logger.info("Startup authentication cancelled.")
+            self.root.destroy()
             return
         if not background_launch:
             self._dashboard_authenticated = True
@@ -538,13 +628,17 @@ class SecureAppLocker(QObject):
         self._watchdog_process = _spawn_watchdog()
         self.controller.start()
 
+        threading.Thread(target=self.icon.run, daemon=True).start()
+
         if not background_launch:
             self.show_dashboard()
+        else:
+            logger.info("%s started in background protection mode.", APP_DISPLAY_NAME)
 
-        self.app.exec()
+        self.root.mainloop()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     if not ensure_windowless_python_session(Path(__file__)):
         raise SystemExit(0)
 
@@ -564,16 +658,19 @@ if __name__ == '__main__':
         raise SystemExit(0)
 
     admin_session_state = ensure_administrator_session()
-    if admin_session_state == 'relaunched':
+    if admin_session_state == "relaunched":
         raise SystemExit(0)
-    if admin_session_state != 'ready':
+    if admin_session_state != "ready":
         raise SystemExit(1)
-        
     _clear_intentional_exit_marker()
-    
-    app = QApplication(sys.argv)
-    locker = SecureAppLocker()
     try:
-        locker.run()
+        app = SecureAppLocker()
+    except tk.TclError as exc:
+        release_single_instance_lock()
+        if relaunch_with_compatible_python(Path(__file__), exc):
+            raise SystemExit(0)
+        raise
+    try:
+        app.run()
     finally:
         release_single_instance_lock()
